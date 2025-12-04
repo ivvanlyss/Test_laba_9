@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Simple Auth Test</title>
+    <style>
+        body { font-family: Arial; max-width: 400px; margin: 100px auto; padding: 20px; }
+        .form-group { margin-bottom: 15px; }
+        input { width: 100%; padding: 10px; margin: 5px 0; border: 1px solid #ddd; }
+        button { width: 100%; padding: 10px; background: #007bff; color: white; border: none; cursor: pointer; }
+        .error { color: red; margin: 10px 0; }
+        .success { color: green; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h2>Simple Authentication</h2>
+    
+    {% if message %}
+    <div class="error">{{ message }}</div>
+    {% endif %}
+    
+    <form action="/login" method="post">
+        <div class="form-group">
+            <input type="text" name="username" placeholder="Username" required>
+        </div>
+        <div class="form-group">
+            <input type="password" name="password" placeholder="Password" required>
+        </div>
+        <button type="submit">Login</button>
+    </form>
+
+    <div style="margin-top: 20px; font-size: 14px; color: #666;">
+        <strong>Test accounts:</strong><br>
+        admin / admin123<br>
+        user / user123<br>
+        test / test123
+    </div>
+</body>
+</html>
