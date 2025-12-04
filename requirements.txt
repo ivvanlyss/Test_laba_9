@@ -1,0 +1,7 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+selenium==4.15.2
+pytest==7.4.3
+webdriver-manager==4.0.1
+pytest-html==4.0.2
+requests==2.31.0
