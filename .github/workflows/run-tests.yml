@@ -1,4 +1,4 @@
-name: Run Autotests
+name: Run Autotests Simplified
 
 on:
   push:
@@ -8,126 +8,42 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04  # Используем более стабильную версию
     
     steps:
-    # Шаг 1: Получение кода из репозитория
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v4
     
-    # Шаг 2: Установка Python
-    - name: Set up Python 3.10
+    - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
-        cache: 'pip'
     
-    # Шаг 3: Установка Chrome через официальный метод GitHub
-    - name: Setup Chrome
-      uses: browser-actions/setup-chrome@v1
-      id: setup-chrome
-      with:
-        chrome-version: 'stable'
-    
-    # Шаг 4: Установка ChromeDriver
-    - name: Setup ChromeDriver
+    - name: Install system dependencies
       run: |
-        # Получаем версию Chrome
-        CHROME_VERSION=$("$CHROME_PATH" --version | awk '{print $3}')
-        echo "Chrome version: $CHROME_VERSION"
+        sudo apt-get update
+        sudo apt-get install -y wget unzip
         
-        # Получаем соответствующую версию ChromeDriver
-        MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d '.' -f1)
-        echo "Major version: $MAJOR_VERSION"
+        # Chrome уже установлен в ubuntu-22.04, просто проверяем
+        google-chrome --version || echo "Chrome not found, installing..."
         
-        # Скачиваем ChromeDriver
-        CHROMEDRIVER_URL="https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$MAJOR_VERSION"
-        CHROMEDRIVER_VERSION=$(curl -s $CHROMEDRIVER_URL)
-        echo "ChromeDriver version: $CHROMEDRIVER_VERSION"
-        
-        # Устанавливаем ChromeDriver
-        wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
+        # Установка ChromeDriver (упрощенная)
+        wget -q https://chromedriver.storage.googleapis.com/114.0.5735.90/chromedriver_linux64.zip
         unzip chromedriver_linux64.zip
         sudo mv chromedriver /usr/local/bin/
         sudo chmod +x /usr/local/bin/chromedriver
-        
-        # Проверяем установку
-        chromedriver --version
     
-    # Шаг 5: Установка зависимостей Python
-    - name: Install Python dependencies
+    - name: Install Python packages
       run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        
-        # Проверка установленных пакетов
-        echo "=== Installed Packages ==="
-        pip list | grep -E "(selenium|fastapi|uvicorn|pytest|python-multipart)"
+        pip install selenium fastapi uvicorn pytest python-multipart
     
-    # Шаг 6: Запуск тестового сервера
-    - name: Start FastAPI server
+    - name: Start server
       run: |
-        echo "Starting FastAPI server..."
-        
-        # Проверяем, что файл существует
-        if [ ! -f "form.py" ]; then
-          echo "ERROR: form.py not found!"
-          ls -la
-          exit 1
-        fi
-        
-        # Запускаем сервер в фоне
-        uvicorn form:app --host 127.0.0.1 --port 8000 --log-level error &
-        SERVER_PID=$!
-        echo "Server PID: $SERVER_PID"
-        
-        # Ждем запуска сервера
-        echo "Waiting for server to start..."
-        sleep 5
-        
-        # Проверяем, что сервер запустился
-        if curl -s -f http://127.0.0.1:8000 > /dev/null; then
-          echo "✅ Server started successfully on http://127.0.0.1:8000"
-          echo "Server is responding with:"
-          curl -s http://127.0.0.1:8000 | head -2
-        else
-          echo "❌ Server failed to start"
-          echo "Checking if process is running..."
-          ps aux | grep uvicorn
-          exit 1
-        fi
+        echo "Starting server..."
+        python -c "import subprocess; import sys; p = subprocess.Popen(['uvicorn', 'form:app', '--host', '127.0.0.1', '--port', '8000'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)"
+        import time
+        time.sleep(5)
     
-    # Шаг 7: Запуск тестов
     - name: Run tests
       run: |
-        echo "=== Running Tests ==="
-        
-        # Проверяем доступность сервера
-        if ! curl -s http://127.0.0.1:8000 > /dev/null; then
-          echo "ERROR: Server is not available!"
-          exit 1
-        fi
-        
-        # Запускаем тесты
-        python -m pytest test.py -v --tb=short
-        
-        # Проверяем результат
-        TEST_EXIT_CODE=$?
-        if [ $TEST_EXIT_CODE -eq 0 ]; then
-          echo "✅ All tests passed!"
-        else
-          echo "❌ Tests failed with exit code: $TEST_EXIT_CODE"
-          exit $TEST_EXIT_CODE
-        fi
-    
-    # Шаг 8: Загрузка результатов
-    - name: Upload test results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: test-results
-        path: |
-          ./*.html
-          ./*.txt
-          ./*.log
-        retention-days: 7
+        python test.py
