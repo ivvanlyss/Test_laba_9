@@ -13,26 +13,27 @@ jobs:
     steps:
     # Шаг 1: Получение кода из репозитория
     - name: Checkout repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
     
     # Шаг 2: Установка Python
     - name: Set up Python 3.10
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: 'pip'
     
-    # Шаг 3: Установка Chrome и ChromeDriver
-    - name: Install Chrome and ChromeDriver
+    # Шаг 3: Установка Chrome и ChromeDriver с использованием официального действия
+    - name: Set up Chrome
+      uses: browser-actions/setup-chrome@v1
+      with:
+        chrome-version: 'stable'
+    
+    - name: Install ChromeDriver
       run: |
         sudo apt-get update
         sudo apt-get install -y wget unzip
-        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-        sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
-        CHROME_VERSION=$(google-chrome --version | cut -d ' ' -f3 | cut -d '.' -f1)
-        CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION")
-        wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
+        LATEST_CHROMEDRIVER_VERSION=$(curl -s https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
+        wget -q "https://chromedriver.storage.googleapis.com/$LATEST_CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
         unzip chromedriver_linux64.zip
         sudo mv chromedriver /usr/local/bin/
         sudo chmod +x /usr/local/bin/chromedriver
@@ -43,22 +44,54 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
+        pip install pytest pytest-html
     
     # Шаг 5: Запуск тестового сервера в фоновом режиме
     - name: Start FastAPI server
       run: |
         uvicorn form:app --host 127.0.0.1 --port 8000 &
+        SERVER_PID=$!
+        echo "Server started with PID: $SERVER_PID"
         sleep 5  # Даем серверу время на запуск
+        
+        # Проверяем, что сервер запустился
+        if ! ps -p $SERVER_PID > /dev/null; then
+          echo "Server failed to start!"
+          exit 1
+        fi
     
     # Шаг 6: Запуск тестов
     - name: Run tests with pytest
       run: |
-        python -m pytest test.py -v --html=report.html --self-contained-html
+        # Проверяем, что сервер доступен
+        curl -f http://127.0.0.1:8000 || echo "Server is not responding"
+        
+        # Запускаем тесты
+        python -m pytest test.py -v --html=test-report.html --self-contained-html
+        
+        # Проверяем, что отчет создан
+        if [ -f "test-report.html" ]; then
+          echo "Test report generated successfully"
+          echo "Report size: $(wc -l < test-report.html) lines"
+        else
+          echo "Test report was not generated"
+        fi
     
-    # Шаг 7: Загрузка отчета о тестировании (опционально)
+    # Шаг 7: Загрузка отчета о тестировании
     - name: Upload test report
-      uses: actions/upload-artifact@v3
       if: always()
+      uses: actions/upload-artifact@v4
       with:
         name: test-report
-        path: report.html
+        path: test-report.html
+        retention-days: 7
+    
+    # Шаг 8: Загрузка логов тестирования
+    - name: Upload test logs
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-logs
+        path: |
+          pytest.log
+        retention-days: 3
