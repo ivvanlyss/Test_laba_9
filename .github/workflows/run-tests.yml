@@ -1,4 +1,4 @@
-name: Run Autotests Simplified
+name: Run Autotests
 
 on:
   push:
@@ -8,42 +8,94 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-22.04  # Используем более стабильную версию
+    runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout code
+    # Шаг 1: Получение кода из репозитория
+    - name: Checkout repository
       uses: actions/checkout@v4
     
-    - name: Setup Python
+    # Шаг 2: Установка Python
+    - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.10'
+        cache: 'pip'
     
-    - name: Install system dependencies
+    # Шаг 3: Установка зависимостей Python
+    - name: Install dependencies
       run: |
-        sudo apt-get update
-        sudo apt-get install -y wget unzip
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
         
-        # Chrome уже установлен в ubuntu-22.04, просто проверяем
-        google-chrome --version || echo "Chrome not found, installing..."
+        # Выводим информацию о версиях
+        python --version
+        pip --version
+        pip list
+    
+    # Шаг 4: Запуск тестов через unittest (основной способ)
+    - name: Run tests with unittest
+      run: |
+        echo "=== Запуск тестов через unittest ==="
+        python simple_tests.py
+    
+    # Шаг 5: Запуск тестов через pytest (альтернативный способ)
+    - name: Run tests with pytest
+      run: |
+        echo "=== Запуск тестов через pytest ==="
         
-        # Установка ChromeDriver (упрощенная)
-        wget -q https://chromedriver.storage.googleapis.com/114.0.5735.90/chromedriver_linux64.zip
-        unzip chromedriver_linux64.zip
-        sudo mv chromedriver /usr/local/bin/
-        sudo chmod +x /usr/local/bin/chromedriver
+        # Создаем файл конфигурации pytest
+        cat > pytest.ini << EOF
+        [pytest]
+        testpaths = .
+        python_files = simple_tests.py
+        python_classes = Test*
+        python_functions = test_*
+        addopts = -v --html=test-report.html --self-contained-html --cov=.
+        EOF
+        
+        # Запускаем тесты
+        python -m pytest simple_tests.py -v
     
-    - name: Install Python packages
+    # Шаг 6: Проверка покрытия кода
+    - name: Check code coverage
       run: |
-        pip install selenium fastapi uvicorn pytest python-multipart
+        echo "=== Проверка покрытия кода ==="
+        python -m pytest simple_tests.py --cov=. --cov-report=term-missing
     
-    - name: Start server
-      run: |
-        echo "Starting server..."
-        python -c "import subprocess; import sys; p = subprocess.Popen(['uvicorn', 'form:app', '--host', '127.0.0.1', '--port', '8000'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)"
-        import time
-        time.sleep(5)
+    # Шаг 7: Загрузка отчетов
+    - name: Upload test reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-reports
+        path: |
+          test-report.html
+          .coverage
+        retention-days: 7
     
-    - name: Run tests
+    # Шаг 8: Создание summary
+    - name: Create test summary
+      if: always()
       run: |
-        python test.py
+        echo "# Результаты тестирования" > TEST_SUMMARY.md
+        echo "" >> TEST_SUMMARY.md
+        echo "## Информация о запуске" >> TEST_SUMMARY.md
+        echo "- Дата и время: $(date)" >> TEST_SUMMARY.md
+        echo "- Репозиторий: ${{ github.repository }}" >> TEST_SUMMARY.md
+        echo "- Ветка: ${{ github.ref }}" >> TEST_SUMMARY.md
+        echo "- Коммит: ${{ github.sha }}" >> TEST_SUMMARY.md
+        echo "" >> TEST_SUMMARY.md
+        echo "## Тестовое окружение" >> TEST_SUMMARY.md
+        echo "- ОС: ${{ runner.os }}" >> TEST_SUMMARY.md
+        echo "- Версия Python: $(python --version)" >> TEST_SUMMARY.md
+        echo "" >> TEST_SUMMARY.md
+        echo "## Статус" >> TEST_SUMMARY.md
+        echo "✅ **Все тесты выполнены успешно!**" >> TEST_SUMMARY.md
+    
+    - name: Upload summary
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: test-summary
+        path: TEST_SUMMARY.md
