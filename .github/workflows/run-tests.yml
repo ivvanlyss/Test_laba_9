@@ -22,10 +22,10 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget
-        # Install Chrome browser
-        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        sudo apt-get install -y wget unzip
+        # Установка Chrome и ChromeDriver
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google.list
         sudo apt-get update
         sudo apt-get install -y google-chrome-stable
     
@@ -42,47 +42,64 @@ jobs:
     
     - name: Start test server in background
       run: |
-        # Start the FastAPI server on port 8000
-        python -c "
-        import subprocess
-        import sys
-        import time
-        from pathlib import Path
-
-        server_process = subprocess.Popen(
-            [sys.executable, 'auth.py'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
-        )
-
-        time.sleep(3)
-
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        result = sock.connect_ex(('127.0.0.1', 8000))
-        sock.close()
-
-        if result == 0:
-            print('Server started successfully on port 8000')
-
-            with open('server.pid', 'w') as f:
-                f.write(str(server_process.pid))
-        else:
-            print('Failed to start server')
-            server_process.terminate()
-            exit(1)
-                "
+        # Проверяем наличие templates директории
+        if [ ! -d "templates" ]; then
+          echo "Creating templates directory..."
+          mkdir -p templates
+        fi
+        
+        # Копируем HTML файлы если они есть в корне
+        if [ -f "simple_login.html" ]; then
+          cp simple_login.html templates/
+        fi
+        if [ -f "success.html" ]; then
+          cp success.html templates/
+        fi
+        
+        echo "Current directory structure:"
+        ls -la
+        echo "Templates directory:"
+        ls -la templates/
+        
+        # Запускаем сервер в фоне
+        echo "Starting FastAPI server..."
+        nohup python auth.py > server.log 2>&1 &
+        SERVER_PID=$!
+        echo $SERVER_PID > server.pid
+        
+        # Ждем запуска сервера
+        sleep 5
+        
+        # Проверяем, запустился ли сервер
+        if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ | grep -q "200\|401"; then
+          echo "Server started successfully"
+          echo "Server logs:"
+          cat server.log || true
+        else
+          echo "Failed to start server"
+          echo "Server logs:"
+          cat server.log || true
+          exit 1
+        fi
     
     - name: Run tests with pytest
       run: |
-        python -m pytest test.py -v --tb=short
+        echo "Running tests..."
+        python -m pytest test.py -v --tb=short --log-cli-level=INFO
     
     - name: Cleanup server
       if: always()
       run: |
+        echo "Cleaning up..."
         if [ -f server.pid ]; then
+          echo "Stopping server..."
           kill $(cat server.pid) 2>/dev/null || true
           rm server.pid
+        fi
+        if [ -f server.log ]; then
+          echo "Server logs:"
+          cat server.log
+          rm server.log
         fi
     
     - name: Upload test results
@@ -91,6 +108,6 @@ jobs:
       with:
         name: test-results
         path: |
-          *.log
+          server.log
           test-reports/
         retention-days: 5
