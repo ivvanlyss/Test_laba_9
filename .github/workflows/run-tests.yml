@@ -22,59 +22,99 @@ jobs:
         python-version: '3.10'
         cache: 'pip'
     
-    # Шаг 3: Установка Chrome и ChromeDriver с использованием официального действия
-    - name: Set up Chrome
-      uses: browser-actions/setup-chrome@v1
-      with:
-        chrome-version: 'stable'
-    
-    - name: Install ChromeDriver
+    # Шаг 3: Установка Chrome и ChromeDriver
+    - name: Install Chrome and ChromeDriver
       run: |
         sudo apt-get update
         sudo apt-get install -y wget unzip
-        LATEST_CHROMEDRIVER_VERSION=$(curl -s https://chromedriver.storage.googleapis.com/LATEST_RELEASE)
-        wget -q "https://chromedriver.storage.googleapis.com/$LATEST_CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
+        
+        # Установка Chrome
+        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        sudo apt-get update
+        sudo apt-get install -y google-chrome-stable
+        
+        # Установка ChromeDriver
+        CHROME_VERSION=$(google-chrome --version | cut -d ' ' -f3 | cut -d '.' -f1)
+        CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION")
+        wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
         unzip chromedriver_linux64.zip
         sudo mv chromedriver /usr/local/bin/
         sudo chmod +x /usr/local/bin/chromedriver
-        chromedriver --version
+        
+        # Проверка версий
+        echo "Chrome version: $(google-chrome --version)"
+        echo "ChromeDriver version: $(chromedriver --version)"
     
-    # Шаг 4: Установка зависимостей Python
+    # Шаг 4: Установка зависимостей Python (включая python-multipart)
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pytest pytest-html
+        
+        # Проверка установки критических пакетов
+        pip list | grep -E "(fastapi|uvicorn|selenium|pytest|python-multipart)"
     
-    # Шаг 5: Запуск тестового сервера в фоновом режиме
+    # Шаг 5: Запуск тестового сервера с проверкой
     - name: Start FastAPI server
       run: |
-        uvicorn form:app --host 127.0.0.1 --port 8000 &
+        echo "Starting FastAPI server..."
+        uvicorn form:app --host 127.0.0.1 --port 8000 --log-level warning &
         SERVER_PID=$!
         echo "Server started with PID: $SERVER_PID"
-        sleep 5  # Даем серверу время на запуск
         
-        # Проверяем, что сервер запустился
-        if ! ps -p $SERVER_PID > /dev/null; then
-          echo "Server failed to start!"
+        # Даем серверу время на запуск и проверяем его
+        for i in {1..10}; do
+          if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000 | grep -q "200"; then
+            echo "Server is running and responding"
+            break
+          fi
+          echo "Waiting for server to start... ($i/10)"
+          sleep 2
+          
+          # Проверяем, жив ли процесс
+          if ! kill -0 $SERVER_PID 2>/dev/null; then
+            echo "Server process died, checking for errors..."
+            # Попробуем запустить сервер в foreground для отладки
+            uvicorn form:app --host 127.0.0.1 --port 8000 || echo "Server failed to start"
+            exit 1
+          fi
+        done
+        
+        # Финальная проверка
+        if ! curl -s http://127.0.0.1:8000 > /dev/null; then
+          echo "ERROR: Server failed to start properly"
           exit 1
         fi
+        
+        echo "Server started successfully"
     
-    # Шаг 6: Запуск тестов
+    # Шаг 6: Запуск тестов с таймаутом
     - name: Run tests with pytest
+      timeout-minutes: 10
       run: |
-        # Проверяем, что сервер доступен
-        curl -f http://127.0.0.1:8000 || echo "Server is not responding"
+        echo "Running tests..."
+        
+        # Создаем файл конфигурации pytest с настройками
+        cat > pytest.ini << EOF
+        [pytest]
+        testpaths = .
+        python_files = test.py
+        python_classes = Test*
+        python_functions = test_*
+        addopts = -v --html=test-report.html --self-contained-html --tb=short
+        timeout = 300
+        EOF
         
         # Запускаем тесты
-        python -m pytest test.py -v --html=test-report.html --self-contained-html
+        python -m pytest test.py -v
         
-        # Проверяем, что отчет создан
-        if [ -f "test-report.html" ]; then
-          echo "Test report generated successfully"
-          echo "Report size: $(wc -l < test-report.html) lines"
+        # Проверяем результат
+        if [ $? -eq 0 ]; then
+          echo "✅ All tests passed!"
         else
-          echo "Test report was not generated"
+          echo "❌ Some tests failed"
+          exit 1
         fi
     
     # Шаг 7: Загрузка отчета о тестировании
@@ -82,16 +122,33 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-report
+        name: test-report-html
         path: test-report.html
-        retention-days: 7
+        retention-days: 30
     
-    # Шаг 8: Загрузка логов тестирования
-    - name: Upload test logs
+    # Шаг 8: Сохранение логов
+    - name: Save test logs
+      if: always()
+      run: |
+        echo "=== Test Execution Summary ===" > test-summary.txt
+        echo "Date: $(date)" >> test-summary.txt
+        echo "Repository: ${{ github.repository }}" >> test-summary.txt
+        echo "Workflow: ${{ github.workflow }}" >> test-summary.txt
+        echo "Run ID: ${{ github.run_id }}" >> test-summary.txt
+        echo "==============================" >> test-summary.txt
+        
+        # Если есть отчет, добавляем информацию о нем
+        if [ -f "test-report.html" ]; then
+          echo "Test report generated: test-report.html" >> test-summary.txt
+          echo "Report size: $(du -h test-report.html | cut -f1)" >> test-summary.txt
+        fi
+        
+        echo "✅ Workflow completed" >> test-summary.txt
+    
+    - name: Upload summary
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: test-logs
-        path: |
-          pytest.log
-        retention-days: 3
+        name: test-summary
+        path: test-summary.txt
+        retention-days: 30
