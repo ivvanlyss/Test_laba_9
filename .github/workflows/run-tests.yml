@@ -2,36 +2,17 @@ name: Run Tests
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 jobs:
   test:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v4
-    
-    - name: Debug - Show files
-      run: |
-        echo "=== Содержимое папки ==="
-        ls -la
-        echo "=== Есть ли requirements.txt? ==="
-        if [ -f "requirements.txt" ]; then
-          echo "requirements.txt найден!"
-          cat requirements.txt
-        else
-          echo "requirements.txt не найден!"
-          echo "Создаём временный..."
-          echo "fastapi==0.104.1" > requirements.txt
-          echo "uvicorn==0.24.0" >> requirements.txt
-          echo "selenium==4.15.2" >> requirements.txt
-          echo "pytest==7.4.3" >> requirements.txt
-          echo "webdriver-manager==4.0.1" >> requirements.txt
-          echo "requests==2.31.0" >> requirements.txt
-        fi
     
     - name: Setup Python
       uses: actions/setup-python@v4
@@ -46,37 +27,23 @@ jobs:
         echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
         sudo apt-get update
         sudo apt-get install -y google-chrome-stable
-        google-chrome --version
     
-    - name: Install Python dependencies
+    - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip list
     
     - name: Start FastAPI server
       run: |
-        echo "Запускаем сервер..."
         uvicorn auth:app --host 127.0.0.1 --port 8000 &
-        echo $! > server.pid
+        echo "Waiting for server..."
         sleep 5
-        echo "Проверяем сервер..."
+        
+        # Проверяем что сервер запустился
         curl -f http://127.0.0.1:8000/ || exit 1
     
     - name: Run tests
+      env:
+        GITHUB_ACTIONS: true
       run: |
-        echo "Запускаем тесты..."
-        python -c "
-import pytest
-import sys
-result = pytest.main(['test.py', '-v', '--tb=short'])
-sys.exit(result)
-        "
-    
-    - name: Stop server
-      if: always()
-      run: |
-        if [ -f server.pid ]; then
-          kill $(cat server.pid) 2>/dev/null || true
-          rm server.pid
-        fi
+        python -m pytest test.py -v
