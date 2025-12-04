@@ -11,19 +11,19 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - name: 📥 Checkout repository
+    - name: Checkout repository
       uses: actions/checkout@v4
     
-    - name: 📁 Debug: Show files
+    - name: Debug - Show files
       run: |
         echo "=== Содержимое папки ==="
         ls -la
         echo "=== Есть ли requirements.txt? ==="
         if [ -f "requirements.txt" ]; then
-          echo "✅ requirements.txt найден!"
+          echo "requirements.txt найден!"
           cat requirements.txt
         else
-          echo "❌ requirements.txt не найден!"
+          echo "requirements.txt не найден!"
           echo "Создаём временный..."
           echo "fastapi==0.104.1" > requirements.txt
           echo "uvicorn==0.24.0" >> requirements.txt
@@ -33,12 +33,12 @@ jobs:
           echo "requests==2.31.0" >> requirements.txt
         fi
     
-    - name: 🐍 Setup Python
+    - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
     
-    - name: 🌐 Install Chrome
+    - name: Install Chrome
       run: |
         sudo apt-get update
         sudo apt-get install -y wget
@@ -48,13 +48,13 @@ jobs:
         sudo apt-get install -y google-chrome-stable
         google-chrome --version
     
-    - name: 📦 Install Python dependencies
+    - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip list
     
-    - name: 🚀 Start FastAPI server
+    - name: Start FastAPI server
       run: |
         echo "Запускаем сервер..."
         uvicorn auth:app --host 127.0.0.1 --port 8000 &
@@ -63,7 +63,7 @@ jobs:
         echo "Проверяем сервер..."
         curl -f http://127.0.0.1:8000/ || exit 1
     
-    - name: 🧪 Run tests
+    - name: Run tests
       run: |
         echo "Запускаем тесты..."
         python -c "
@@ -73,7 +73,7 @@ result = pytest.main(['test.py', '-v', '--tb=short'])
 sys.exit(result)
         "
     
-    - name: 🛑 Stop server
+    - name: Stop server
       if: always()
       run: |
         if [ -f server.pid ]; then
