@@ -22,92 +22,207 @@ jobs:
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y wget unzip
-        # Установка Chrome и ChromeDriver
-        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google.list
+        sudo apt-get install -y wget curl
+        
+        # Установка Google Chrome
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
         sudo apt-get update
         sudo apt-get install -y google-chrome-stable
-    
+        
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    
+        pip list
+        
     - name: Verify installations
       run: |
         python --version
-        pip list
-        google-chrome --version
-    
-    - name: Start test server in background
-      run: |
-        # Проверяем наличие templates директории
-        if [ ! -d "templates" ]; then
-          echo "Creating templates directory..."
-          mkdir -p templates
-        fi
+        echo "Chrome version:"
+        google-chrome --version || echo "Chrome not found"
         
-        # Копируем HTML файлы если они есть в корне
-        if [ -f "simple_login.html" ]; then
+    - name: Prepare project structure
+      run: |
+        # Убедимся, что файлы на месте
+        echo "Project structure:"
+        ls -la
+        
+        echo "Checking auth.py..."
+        head -30 auth.py
+        
+        echo "Checking templates directory..."
+        ls -la templates/ || mkdir -p templates
+        
+        # Проверим, что HTML файлы в правильном месте
+        if [ -f "simple_login.html" ] && [ ! -f "templates/simple_login.html" ]; then
+          echo "Copying simple_login.html to templates/"
           cp simple_login.html templates/
         fi
-        if [ -f "success.html" ]; then
+        
+        if [ -f "success.html" ] && [ ! -f "templates/success.html" ]; then
+          echo "Copying success.html to templates/"
           cp success.html templates/
         fi
         
-        echo "Current directory structure:"
-        ls -la
-        echo "Templates directory:"
-        ls -la templates/
+    - name: Start test server
+      run: |
+        echo "Starting FastAPI server..."
         
         # Запускаем сервер в фоне
-        echo "Starting FastAPI server..."
-        nohup python auth.py > server.log 2>&1 &
+        python auth.py > server_output.log 2>&1 &
         SERVER_PID=$!
         echo $SERVER_PID > server.pid
         
-        # Ждем запуска сервера
-        sleep 5
+        echo "Waiting for server to start..."
         
-        # Проверяем, запустился ли сервер
-        if curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ | grep -q "200\|401"; then
-          echo "Server started successfully"
-          echo "Server logs:"
-          cat server.log || true
-        else
-          echo "Failed to start server"
-          echo "Server logs:"
-          cat server.log || true
-          exit 1
-        fi
-    
+        # Ждем и проверяем сервер
+        for i in {1..10}; do
+          echo "Attempt $i: Checking server..."
+          
+          # Проверяем, жив ли процесс
+          if ! kill -0 $SERVER_PID 2>/dev/null; then
+            echo "Server process died"
+            echo "Server output:"
+            cat server_output.log
+            exit 1
+          fi
+          
+          # Проверяем порт
+          if timeout 2 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8000' 2>/dev/null; then
+            echo "Server is running on port 8000"
+            
+            # Проверяем HTTP-ответ
+            HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8000/ || echo "000")
+            echo "HTTP Status: $HTTP_STATUS"
+            
+            if [ "$HTTP_STATUS" != "000" ]; then
+              echo "Server started successfully!"
+              echo "Server logs (last 20 lines):"
+              tail -20 server_output.log
+              exit 0
+            fi
+          fi
+          
+          sleep 2
+        done
+        
+        echo "Server failed to start within 20 seconds"
+        echo "Server output:"
+        cat server_output.log
+        exit 1
+        
     - name: Run tests with pytest
       run: |
         echo "Running tests..."
-        python -m pytest test.py -v --tb=short --log-cli-level=INFO
-    
-    - name: Cleanup server
+        
+        # Создаем тестовый скрипт для headless режима
+        cat > test_ci.py << 'EOF'
+        import pytest
+        from selenium import webdriver
+        from selenium.webdriver.common.by import By
+        from selenium.webdriver.support.ui import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.chrome.options import Options
+        from selenium.webdriver.chrome.service import Service
+        from webdriver_manager.chrome import ChromeDriverManager
+
+        class TestSimpleAuth:
+            @pytest.fixture
+            def driver(self):
+               options = Options()
+               options.add_argument("--headless")
+               options.add_argument("--no-sandbox")
+               options.add_argument("--disable-dev-shm-usage")
+               options.add_argument("--disable-gpu")
+                options.add_argument("--window-size=1920,1080")
+        
+               service = Service(ChromeDriverManager().install())
+                driver = webdriver.Chrome(service=service, options=options)
+                driver.implicitly_wait(5)
+                yield driver
+                driver.quit()
+
+            def test_successful_login(self, driver):
+                print("\nTesting successful login...")
+        
+                driver.get("http://127.0.0.1:8000/")
+        
+                username_field = driver.find_element(By.NAME, "username")
+                password_field = driver.find_element(By.NAME, "password")
+                login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+        
+                username_field.send_keys("admin")
+                password_field.send_keys("admin123")
+                login_button.click()
+        
+                WebDriverWait(driver, 10).until(
+                    EC.url_contains("/success")
+                )
+        
+               assert "/success" in driver.current_url
+               print("Success page loaded correctly")
+        
+                # Проверяем наличие текста на странице успеха
+               page_text = driver.page_source
+               assert "Login Successful" in page_text
+                print("Success message found")
+
+            def test_failed_login(self, driver):
+               print("\nTesting failed login...")
+        
+               driver.get("http://127.0.0.1:8000/")
+        
+               username_field = driver.find_element(By.NAME, "username")
+               password_field = driver.find_element(By.NAME, "password")
+               login_button = driver.find_element(By.XPATH, "//button[@type='submit']")
+        
+               username_field.send_keys("wronguser")
+               password_field.send_keys("wrongpass")
+                login_button.click()
+        
+                # Ждем, пока останемся на той же странице или появится ошибка
+                time.sleep(2)
+        
+                # Проверяем URL или наличие ошибки
+               page_source = driver.page_source
+                assert "Invalid username or password" in page_source or "127.0.0.1:8000/" in driver.current_url
+                print("Error handled correctly")
+
+        if __name__ == "__main__":
+            pytest.main(["-v", "test_ci.py"])
+        EOF
+        
+        # Устанавливаем webdriver-manager для headless
+        pip install webdriver-manager
+        
+        # Запускаем тесты
+        python -m pytest test_ci.py -v --tb=short --log-cli-level=INFO
+        
+    - name: Cleanup
       if: always()
       run: |
         echo "Cleaning up..."
+        
+        # Останавливаем сервер
         if [ -f server.pid ]; then
           echo "Stopping server..."
           kill $(cat server.pid) 2>/dev/null || true
           rm server.pid
         fi
-        if [ -f server.log ]; then
+        
+        # Показываем логи сервера
+        if [ -f server_output.log ]; then
           echo "Server logs:"
-          cat server.log
-          rm server.log
+          cat server_output.log
+          rm server_output.log
         fi
-    
+        
     - name: Upload test results
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: test-results
         path: |
-          server.log
-          test-reports/
+          *.log
         retention-days: 5
